@@ -1,6 +1,6 @@
-# zerotier_sockets_example
+# example
 
-Demonstrates how to use the zerotier_sockets plugin.
+A new Flutter project.
 
 ## Getting Started
 

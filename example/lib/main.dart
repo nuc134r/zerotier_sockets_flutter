@@ -66,12 +66,15 @@ class HomePageState extends State<HomePage> {
   }
 
   Future<void> _onJoinNetwork() async {
-    var result = await InputDialog.show(context, title: 'Join network', hint: 'Network ID', sendText: 'ADD');
+    var result = await InputDialog.show(
+        context, title: 'Join network', hint: 'Network ID', sendText: 'ADD');
     if (result != null) {
       var networkId = BigInt.tryParse(result, radix: 16);
-      if (networkId != null) {
+      if (networkId != null && networkId > BigInt.zero) {
         _networkIds.add(networkId);
         _node.join(networkId);
+      } else {
+        print('Invalid Network ID entered: $result');
       }
     }
   }
@@ -85,12 +88,14 @@ class HomePageState extends State<HomePage> {
   }
 
   Future<void> _onCreateSocket() async {
-    var address = await InputDialog.show(context, title: 'Connect socket', hint: 'IP address', sendText: 'NEXT');
+    var address = await InputDialog.show(
+        context, title: 'Connect socket', hint: 'IP address', sendText: 'NEXT');
     if (address == null) {
       return;
     }
 
-    var port = await InputDialog.show(context, title: 'Connect socket', hint: 'Port', sendText: 'CONNECT');
+    var port = await InputDialog.show(
+        context, title: 'Connect socket', hint: 'Port', sendText: 'CONNECT');
     if (port == null || int.tryParse(port) == null) {
       return;
     }
@@ -120,7 +125,8 @@ class HomePageState extends State<HomePage> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(milliseconds: 500), (t) => _updateStatus());
+    _timer =
+        Timer.periodic(const Duration(milliseconds: 500), (t) => _updateStatus());
   }
 
   @override
@@ -146,7 +152,7 @@ class HomePageState extends State<HomePage> {
     if (id.success) {
       var identity = id.data.toRadixString(16);
       if (identity != _identity) {
-        _identity = identity ?? 'none';
+        _identity = identity;
         needUpdate = true;
       }
     } else {
@@ -159,16 +165,19 @@ class HomePageState extends State<HomePage> {
     NetworkModel createNetworkModel(BigInt id) {
       var info = _node.getNetworkInfo(id);
       if (info != null) {
-        return NetworkModel.fromInfo(info);
-      } else {
-        return NetworkModel.fromId(id);
+        try {
+          return NetworkModel.fromInfo(info);
+        } catch (e) {
+          print('Error creating network model: $e');
+        }
       }
+      return NetworkModel.fromId(id); // Fallback if info is null or invalid
     }
 
     if (_networks.length != _networkIds.length) {
       needUpdate = true;
       _networks.clear();
-      for (var id in _networkIds) {
+      for (BigInt id in _networkIds) {
         _networks.add(createNetworkModel(id));
       }
     } else {
