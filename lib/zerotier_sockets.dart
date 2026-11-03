@@ -1,7 +1,7 @@
-﻿export 'src/error.dart';
-export 'src/network.dart';
+/// ZeroTier sockets (libzt) for Dart: join ZeroTier networks from inside your app and talk TCP and UDP
+/// over them, without a VPN or root.
+library;
+
+export 'src/native.dart' show ZeroTierException;
 export 'src/node.dart';
-export 'src/result.dart';
 export 'src/socket.dart';
-export 'src/socket_error.dart';
-export 'src/utils.dart';

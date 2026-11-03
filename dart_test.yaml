@@ -1,0 +1,3 @@
+tags:
+  network:
+    skip: "needs a real ZeroTier network; run with -t network (see test/network_test.dart)"

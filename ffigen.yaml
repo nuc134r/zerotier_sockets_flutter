@@ -1,21 +1,20 @@
-# Run with `flutter pub run ffigen --config ffigen.yaml`.
+# Regenerate: dart run ffigen --config ffigen.yaml
 name: ZeroTierNative
-description: |
-  Bindings for `src/ZeroTierSockets.h`.
-
-  Regenerate bindings with `flutter pub run ffigen --config ffigen.yaml`.
-output: 'lib/src/bindings.dart'
+description: Bindings for third_party/ZeroTierSockets.h (libzt), as @Native functions in the libzt.dart asset.
+output: lib/src/bindings.g.dart
+ffi-native:
+  asset-id: package:zerotier_sockets/libzt.dart
 headers:
   entry-points:
-    - 'src/ZeroTierSockets.h'
-    
+    - third_party/ZeroTierSockets.h
+functions:
+  include:
+    - 'zts_.*'
+globals:
+  include:
+    - 'zts_errno'
 preamble: |
-  // ignore_for_file: always_specify_types
-  // ignore_for_file: camel_case_types
-  // ignore_for_file: non_constant_identifier_names
+  // ignore_for_file: always_specify_types, camel_case_types, non_constant_identifier_names, constant_identifier_names, unused_field
 comments:
   style: any
-  length: full
-functions:
-  rename:
-    'zts_(.*)': '$1'
+  length: brief
