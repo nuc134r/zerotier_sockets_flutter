@@ -38,6 +38,8 @@ void main(List<String> args) async {
       outDir: outDir,
       defines: {
         'CMAKE_BUILD_TYPE': 'Release',
+        // libzt and its submodules declare cmake_minimum_required < 3.5, which CMake 4 refuses.
+        'CMAKE_POLICY_VERSION_MINIMUM': '3.5',
         'BUILD_HOST_SELFTEST': 'OFF',
         'BUILD_STATIC_LIB': 'OFF',
         'ALLOW_INSTALL_TARGET': 'OFF',
