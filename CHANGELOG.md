@@ -1,3 +1,10 @@
+## 2.0.0-dev.3
+
+- Fix: a crash when joining networks right after `start()` (libzt says the service runs before it has
+  created its node; the join dereferenced a null pointer). `start()` now completes once the node has
+  an id, and joins made while it starts are held until then.
+- Fix: network names were never returned (`zts_net_get_name` accepts only its exact maximum length).
+
 ## 2.0.0-dev.2
 
 - `ZeroTierNode.start()` and `stop()` return futures: libzt stops its service on another thread, and

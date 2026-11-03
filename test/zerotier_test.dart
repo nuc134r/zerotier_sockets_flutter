@@ -68,4 +68,22 @@ void main() {
     final again = await node.watch(interval: const Duration(milliseconds: 100)).map((s) => s.nodeId).firstWhere((id) => id != null).timeout(const Duration(seconds: 30));
     expect(again, id);
   });
+
+  test('joining right after start waits for the node (libzt crashed on a null node)', () async {
+    await node.stop();
+    final starting = node.start();
+    // As an app restoring two networks does: join while libzt is still creating its node.
+    final a = parseNetworkId('8056c2e21c000001')!, b = parseNetworkId('8056c2e21c000002')!;
+    node
+      ..join(a)
+      ..join(b);
+    await starting;
+    expect(node.joined, {a, b});
+    await Future<void>.delayed(const Duration(milliseconds: 500)); // the process would be gone by now
+    expect(node.nodeId, isNotNull);
+    expect(node.network(a).idHex, '8056c2e21c000001');
+    node
+      ..leave(a)
+      ..leave(b);
+  });
 }

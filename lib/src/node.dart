@@ -68,6 +68,12 @@ class ZeroTierNode {
   String? _storagePath;
   Future<void>? _stopping;
 
+  /// libzt reports the service as running before it has created its node; joining in that window
+  /// dereferences a null pointer and crashes the process. Joins wait until the node has an id.
+  bool _ready = false;
+  bool _starting = false;
+  final Set<BigInt> _pendingJoins = {};
+
   bool get running => _running;
 
   bool get online => _running && zts_node_is_online() == 1;
@@ -79,14 +85,35 @@ class ZeroTierNode {
     _storagePath = path;
   }
 
-  /// Starts the node, after a previous [stop] has finished.
+  /// Starts the node, after a previous [stop] has finished, and completes once it is ready (has an id).
   Future<void> start() async {
-    await _stopping;
-    if (_running) return;
-    final path = _storagePath;
-    if (path != null) check(withCString(path, zts_init_from_storage), 'init_from_storage');
-    check(zts_node_start(), 'node_start');
-    _running = true;
+    _starting = true; // at once, so joins made before the first await wait too
+    try {
+      await _stopping;
+      if (_running) return;
+      final path = _storagePath;
+      if (path != null) check(withCString(path, zts_init_from_storage), 'init_from_storage');
+      check(zts_node_start(), 'node_start');
+      _running = true;
+      _ready = false;
+      await _untilReady();
+    } finally {
+      _starting = false;
+    }
+  }
+
+  /// Waits for the node's id (its identity is loaded or generated, the node exists), then joins the
+  /// networks asked for meanwhile.
+  Future<void> _untilReady() async {
+    while (_running && zts_node_get_id() <= 0) {
+      await Future<void>.delayed(const Duration(milliseconds: 50));
+    }
+    if (!_running) return;
+    _ready = true;
+    for (final id in _pendingJoins.toList()) {
+      _pendingJoins.remove(id);
+      check(zts_net_join(_u64(id)), 'net_join');
+    }
   }
 
   /// Stops the node and forgets the joined networks. libzt tears the service down on its own thread,
@@ -94,6 +121,8 @@ class ZeroTierNode {
   Future<void> stop() {
     if (!_running) return _stopping ?? Future.value();
     _running = false;
+    _ready = false;
+    _pendingJoins.clear();
     _joined.clear();
     return _stopping = _stop().whenComplete(() => _stopping = null);
   }
@@ -113,12 +142,21 @@ class ZeroTierNode {
     return id <= 0 ? null : id.toRadixString(16).padLeft(10, '0');
   }
 
+  /// Joins [networkId]; while the node is still starting, the join happens once it is ready.
   void join(BigInt networkId) {
-    check(zts_net_join(_u64(networkId)), 'net_join');
+    if (_starting || (_running && !_ready)) {
+      _pendingJoins.add(networkId);
+    } else {
+      check(zts_net_join(_u64(networkId)), 'net_join');
+    }
     _joined.add(networkId);
   }
 
   void leave(BigInt networkId) {
+    if (_pendingJoins.remove(networkId)) {
+      _joined.remove(networkId);
+      return;
+    }
     zts_net_leave(_u64(networkId));
     _joined.remove(networkId);
   }
@@ -128,7 +166,9 @@ class ZeroTierNode {
   ZeroTierNetworkState network(BigInt id) {
     final n = _u64(id);
     final status = zts_net_get_status(n);
-    final name = _string(ZTS_MAX_NETWORK_SHORT_NAME_LENGTH + 1, (p, len) => zts_net_get_name(n, p, len));
+    // libzt insists on exactly ZTS_MAX_NETWORK_SHORT_NAME_LENGTH (any other length is ZTS_ERR_ARG, so
+    // names never showed); the buffer has one more byte for the terminator.
+    final name = _string(ZTS_MAX_NETWORK_SHORT_NAME_LENGTH + 1, (p, _) => zts_net_get_name(n, p, ZTS_MAX_NETWORK_SHORT_NAME_LENGTH));
     return ZeroTierNetworkState(
       id: id,
       status: status < 0 ? ZeroTierNetworkStatus.requestingConfiguration : ZeroTierNetworkStatus.of(status),
