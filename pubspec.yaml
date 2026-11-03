@@ -1,6 +1,6 @@
 name: zerotier_sockets
 description: ZeroTier sockets (libzt) for Dart and Flutter. TCP and UDP over ZeroTier networks, built from source with native assets.
-version: 2.0.0-dev.1
+version: 2.0.0-dev.2
 repository: https://github.com/nuc134r/zerotier_sockets_flutter
 
 environment:

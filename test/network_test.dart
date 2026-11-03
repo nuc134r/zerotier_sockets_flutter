@@ -24,7 +24,7 @@ void main() {
 
   setUpAll(() async {
     node.initStorage(Platform.environment['ZT_TEST_STORAGE'] ?? Directory.systemTemp.createTempSync('zt-net-').path);
-    node.start();
+    await node.start();
     node.join(net);
     // ignore: avoid_print
     print('node ${await node.watch().map((s) => s.nodeId).firstWhere((id) => id != null)} joining ${net.toRadixString(16)}');

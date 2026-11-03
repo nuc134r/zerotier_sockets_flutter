@@ -65,23 +65,45 @@ class ZeroTierNode {
 
   final Set<BigInt> _joined = {};
   bool _running = false;
+  String? _storagePath;
+  Future<void>? _stopping;
 
   bool get running => _running;
 
   bool get online => _running && zts_node_is_online() == 1;
 
-  /// The node's identity is kept in [path] (created when missing). Call before [start].
-  void initStorage(String path) => check(withCString(path, zts_init_from_storage), 'init_from_storage');
+  /// The node's identity is kept in [path] (created when missing). Call before [start]; it is applied
+  /// again on every start (libzt forgets it when the node stops).
+  void initStorage(String path) {
+    check(withCString(path, zts_init_from_storage), 'init_from_storage');
+    _storagePath = path;
+  }
 
-  void start() {
+  /// Starts the node, after a previous [stop] has finished.
+  Future<void> start() async {
+    await _stopping;
+    if (_running) return;
+    final path = _storagePath;
+    if (path != null) check(withCString(path, zts_init_from_storage), 'init_from_storage');
     check(zts_node_start(), 'node_start');
     _running = true;
   }
 
-  void stop() {
-    if (!_running) return;
-    zts_node_stop();
+  /// Stops the node and forgets the joined networks. libzt tears the service down on its own thread,
+  /// so the future completes a moment later; [start] waits for it (starting too early crashes libzt).
+  Future<void> stop() {
+    if (!_running) return _stopping ?? Future.value();
     _running = false;
+    _joined.clear();
+    return _stopping = _stop().whenComplete(() => _stopping = null);
+  }
+
+  Future<void> _stop() async {
+    // Right after start the service thread may not be up yet.
+    for (var i = 0; zts_node_stop() == zts_error_t.ZTS_ERR_SERVICE.value && i < 20; i++) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    await Future<void>.delayed(const Duration(milliseconds: 750));
   }
 
   /// 10 hex digits, or null while the identity is being generated.
@@ -125,25 +147,49 @@ class ZeroTierNode {
         networks: [for (final id in _joined) network(id)],
       );
 
-  /// The node's state every [interval] (only when it changed).
-  Stream<ZeroTierNodeState> watch({Duration interval = const Duration(milliseconds: 500)}) async* {
+  /// The node's state every [interval] (only when it changed). Cancelling the subscription stops
+  /// polling at once.
+  Stream<ZeroTierNodeState> watch({Duration interval = const Duration(milliseconds: 500)}) {
+    Timer? timer;
     String? last;
-    while (true) {
+    late final StreamController<ZeroTierNodeState> controller;
+    void poll() {
       final s = state;
       final key = '${s.running}${s.online}${s.nodeId}${[for (final n in s.networks) '${n.idHex}${n.status}${n.addresses}${n.name}']}';
       if (key != last) {
         last = key;
-        yield s;
+        controller.add(s);
       }
-      await Future<void>.delayed(interval);
     }
+
+    void resume() {
+      poll();
+      timer = Timer.periodic(interval, (_) => poll());
+    }
+
+    void pause() {
+      timer?.cancel();
+      timer = null;
+    }
+
+    controller = StreamController(onListen: resume, onResume: resume, onPause: pause, onCancel: pause);
+    return controller.stream;
   }
 
   /// Waits until the node is online and [networkId] (if given) is ready.
-  Future<void> waitUntilReady({BigInt? networkId, Duration timeout = const Duration(seconds: 60)}) =>
-      watch(interval: const Duration(milliseconds: 100))
-          .firstWhere((s) => s.online && (networkId == null || s.networks.any((n) => n.id == networkId && n.ready)))
-          .timeout(timeout);
+  Future<void> waitUntilReady({BigInt? networkId, Duration timeout = const Duration(seconds: 60)}) async {
+    final ready = Completer<void>();
+    final sub = watch(interval: const Duration(milliseconds: 100)).listen((s) {
+      if (!ready.isCompleted && s.online && (networkId == null || s.networks.any((n) => n.id == networkId && n.ready))) {
+        ready.complete();
+      }
+    });
+    try {
+      await ready.future.timeout(timeout);
+    } finally {
+      await sub.cancel();
+    }
+  }
 
   static int _u64(BigInt id) => id.toUnsigned(64).toSigned(64).toInt();
 

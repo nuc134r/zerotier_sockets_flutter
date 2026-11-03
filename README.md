@@ -14,10 +14,9 @@ Version 2 is a rewrite:
 - One shared, adaptive poll loop for all sockets instead of a timer per socket.
 
 ```dart
-final node = ZeroTierNode.instance
-  ..initStorage('${appDir.path}/zerotier') // keeps the node identity
-  ..start()
-  ..join(parseNetworkId('8056c2e21c000001')!);
+final node = ZeroTierNode.instance..initStorage('${appDir.path}/zerotier'); // keeps the node identity
+await node.start();
+node.join(parseNetworkId('8056c2e21c000001')!);
 await node.waitUntilReady(networkId: parseNetworkId('8056c2e21c000001'));
 
 final socket = await ZeroTierSocket.connect('10.147.17.5', 22);
@@ -29,7 +28,8 @@ udp.listen((packet) => print('${packet.address}:${packet.port} ${packet.data}'))
 udp.send([1, 2, 3], '10.147.17.5', 9000);
 ```
 
-`node.watch()` streams the node's state (online, networks, assigned addresses).
+`node.watch()` streams the node's state (online, networks, assigned addresses). `await node.stop()` stops
+it; a later `start()` waits until libzt has finished stopping.
 
 ## Building
 

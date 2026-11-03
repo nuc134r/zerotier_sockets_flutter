@@ -1,3 +1,10 @@
+## 2.0.0-dev.2
+
+- `ZeroTierNode.start()` and `stop()` return futures: libzt stops its service on another thread, and
+  starting again before it finished crashed. The storage path is applied again on every start.
+- Fix: cancelling a `watch()` subscription hung until the state changed (so code awaiting the cancel
+  before `stop()` never stopped the node). `waitUntilReady` no longer keeps polling after a timeout.
+
 ## 2.0.0-dev.1
 
 - Pure Dart package with a native-assets build hook that compiles libzt 1.8.10 from source (no prebuilt

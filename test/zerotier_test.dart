@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 
@@ -11,12 +12,12 @@ void main() {
   setUpAll(() async {
     storage = Directory.systemTemp.createTempSync('zt-node-');
     node.initStorage(storage.path);
-    node.start();
+    await node.start();
     // The identity is generated (or loaded) right after start, network or not.
     await node.watch(interval: const Duration(milliseconds: 100)).firstWhere((s) => s.nodeId != null).timeout(const Duration(seconds: 30));
   });
-  tearDownAll(() {
-    node.stop();
+  tearDownAll(() async {
+    await node.stop();
     storage.deleteSync(recursive: true);
   });
 
@@ -47,5 +48,24 @@ void main() {
       throwsA(isA<ZeroTierException>()),
     );
   });
-}
 
+  test('cancelling a watch returns at once, even when nothing changed', () async {
+    final sub = node.watch().listen((_) {});
+    await Future<void>.delayed(const Duration(milliseconds: 50));
+    await sub.cancel().timeout(const Duration(seconds: 1));
+  });
+
+  // Keep last: it restarts the node.
+  test('stop and start again, also in quick succession, keeping the identity', () async {
+    final id = node.nodeId;
+    final stopped = node.stop();
+    expect(node.running, isFalse);
+    expect(node.nodeId, isNull);
+    await node.start(); // waits for the stop
+    await stopped;
+    unawaited(node.stop());
+    await node.start();
+    final again = await node.watch(interval: const Duration(milliseconds: 100)).map((s) => s.nodeId).firstWhere((id) => id != null).timeout(const Duration(seconds: 30));
+    expect(again, id);
+  });
+}
