@@ -2,6 +2,7 @@
 /// over them, without a VPN or root.
 library;
 
+export 'src/guard.dart';
 export 'src/native.dart' show ZeroTierException;
 export 'src/node.dart';
 export 'src/socket.dart';

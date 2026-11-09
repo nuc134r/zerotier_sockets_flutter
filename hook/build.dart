@@ -10,6 +10,9 @@
 // otherwise the pinned libzt commit is cloned once into the hook's shared cache (offline builds,
 // F-Droid: vendor a checkout and use libzt_src). Needs git, CMake and a C/C++ toolchain (the Android
 // NDK for Android targets).
+//
+// `memory_guard: true` (same place) builds libzt with a guarded allocator for finding heap corruption:
+// see hook/guard/zt_guard.c. It costs memory and speed; leave it off unless you are hunting a crash.
 import 'dart:io';
 
 import 'package:code_assets/code_assets.dart';
@@ -31,6 +34,8 @@ void main(List<String> args) async {
 
     final source = await _sources(input, logger);
     final os = input.config.code.targetOS;
+    final guard = input.userDefines['memory_guard'] == true;
+    final guardCmake = input.packageRoot.resolve('hook/guard/zt_guard.cmake');
     final outDir = input.outputDirectory.resolve('build/');
     final builder = CMakeBuilder.create(
       name: 'zt',
@@ -45,8 +50,10 @@ void main(List<String> args) async {
         'ALLOW_INSTALL_TARGET': 'OFF',
         // C API only: no JNI glue on Android.
         'ZTS_NDK_ONLY': 'ON',
-        // Strip symbols; 16 KB pages for Android 15+ devices.
-        'CMAKE_SHARED_LINKER_FLAGS': os == OS.android ? '-s -Wl,-z,max-page-size=16384' : '-s',
+        // Strip symbols (kept with the guard, so a crash names the libzt function); 16 KB pages for
+        // Android 15+ devices.
+        'CMAKE_SHARED_LINKER_FLAGS': [if (!guard) '-s', if (os == OS.android) '-Wl,-z,max-page-size=16384'].join(' '),
+        if (guard) 'CMAKE_PROJECT_zt_INCLUDE': guardCmake.toFilePath(),
       },
       targets: ['zt-shared'],
       logger: logger,
@@ -59,6 +66,11 @@ void main(List<String> args) async {
       CodeAsset(package: input.packageName, name: 'libzt.dart', linkMode: DynamicLoadingBundled(), file: lib.uri),
     );
     output.dependencies.add(source.resolve('CMakeLists.txt'));
+    if (guard) {
+      output.dependencies
+        ..add(guardCmake)
+        ..add(input.packageRoot.resolve('hook/guard/zt_guard.c'));
+    }
   });
 }
 

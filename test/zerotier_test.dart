@@ -26,6 +26,14 @@ void main() {
     expect(storage.listSync().map((e) => e.uri.pathSegments.where((s) => s.isNotEmpty).last), contains('identity.secret'));
   });
 
+  test('the guarded allocator (memory_guard in pubspec.yaml) holds libzt\'s allocations', () {
+    final stats = ZeroTierMemoryGuard.stats();
+    expect(stats, isNotNull);
+    expect(stats!.allocations, greaterThan(0));
+    expect(stats.live, greaterThan(0));
+    expect(stats.fallbacks, 0, reason: 'nothing went to the unguarded allocator');
+  });
+
   test('network ids', () {
     expect(parseNetworkId('8056c2e21c000001'), BigInt.parse('8056c2e21c000001', radix: 16));
     expect(parseNetworkId('not an id'), isNull);

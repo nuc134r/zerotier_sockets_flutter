@@ -1,3 +1,13 @@
+## 2.0.0-dev.4
+
+- `memory_guard` user define: builds libzt with a guarded allocator for finding heap corruption. Each
+  of libzt's allocations (lwIP's packet buffers included: it allocates them with `malloc`) gets its own
+  pages ending at a guard page, and freed memory stays inaccessible for the next 4096 frees, so an
+  overrun, a write after free or a double free inside libzt faults at once, in libzt, instead of
+  damaging the app's heap. libzt keeps its symbols then, so a crash names the function.
+  `ZeroTierMemoryGuard.stats()` reports what it holds (null without the guard). About 8 µs per
+  allocation; off by default.
+
 ## 2.0.0-dev.3
 
 - Fix: a crash when joining networks right after `start()` (libzt says the service runs before it has
