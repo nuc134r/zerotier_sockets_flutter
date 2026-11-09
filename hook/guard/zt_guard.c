@@ -24,7 +24,6 @@ void *__real_realloc(void *p, size_t size);
 void __real_free(void *p);
 int __real_posix_memalign(void **out, size_t align, size_t size);
 void *__real_memalign(size_t align, size_t size);
-void *__real_aligned_alloc(size_t align, size_t size);
 size_t __real_malloc_usable_size(const void *p);
 
 #define kMagic 0x5a7447756172644bULL
@@ -214,7 +213,9 @@ void *__wrap_aligned_alloc(size_t align, size_t size) {
   void *p = guarded(size, align);
   if (p) return p;
   __atomic_add_fetch(&stats[4], 1, __ATOMIC_RELAXED);
-  return __real_aligned_alloc(align, size);
+  // Not __real_aligned_alloc: Android has it only from API 28.
+  void *out = NULL;
+  return __real_posix_memalign(&out, align, size) == 0 ? out : NULL;
 }
 
 size_t __wrap_malloc_usable_size(const void *p) {
