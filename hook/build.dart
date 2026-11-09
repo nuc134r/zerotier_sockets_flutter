@@ -24,6 +24,13 @@ import 'package:native_toolchain_cmake/native_toolchain_cmake.dart';
 const libztRepo = 'https://github.com/zerotier/libzt.git';
 const libztCommit = 'a6f6886a8c8c07249f9e5d0cae431848727fe845';
 
+/// Fixes applied to the pinned libzt (hook/patches, in name order). Bump [patchLevel] when they change, so
+/// cached checkouts are fetched and patched again. A libzt_src checkout is used as it is: apply them there.
+///
+/// 0001: event structs were filled past their end (a peer with more than 16 paths, a network with more
+/// than 16 addresses or 32 routes): heap corruption that crashed apps at random.
+const patchLevel = 1;
+
 void main(List<String> args) async {
   await build(args, (input, output) async {
     if (!input.config.buildCodeAssets) return;
@@ -37,6 +44,17 @@ void main(List<String> args) async {
     final guard = input.userDefines['memory_guard'] == true;
     final guardCmake = input.packageRoot.resolve('hook/guard/zt_guard.cmake');
     final outDir = input.outputDirectory.resolve('build/');
+    // A build directory configured for another source (an older patch level) makes CMake refuse.
+    final cache = File.fromUri(outDir.resolve('CMakeCache.txt'));
+    if (cache.existsSync()) {
+      final home = RegExp(r'^CMAKE_HOME_DIRECTORY:INTERNAL=(.*)$', multiLine: true).firstMatch(cache.readAsStringSync());
+      final configured = home?.group(1);
+      final wanted = Directory.fromUri(source).absolute.path.replaceAll(RegExp(r'/+$'), '');
+      if (configured != null && configured != wanted) {
+        logger.info('Sources changed ($configured): building afresh');
+        Directory.fromUri(outDir).deleteSync(recursive: true);
+      }
+    }
     final builder = CMakeBuilder.create(
       name: 'zt',
       sourceDir: source,
@@ -78,7 +96,7 @@ Future<Uri> _sources(BuildInput input, Logger logger) async {
   final local = input.userDefines.path('libzt_src');
   if (local != null) return local.path.endsWith('/') ? local : Uri.directory(local.toFilePath());
 
-  final dir = Directory.fromUri(input.outputDirectoryShared.resolve('libzt-$libztCommit/'));
+  final dir = Directory.fromUri(input.outputDirectoryShared.resolve('libzt-$libztCommit-p$patchLevel/'));
   final marker = File.fromUri(dir.uri.resolve('.nux-complete'));
   if (await marker.exists()) return dir.uri;
 
@@ -95,7 +113,16 @@ Future<Uri> _sources(BuildInput input, Logger logger) async {
   await git(['fetch', '-q', '--depth', '1', 'origin', libztCommit]);
   await git(['checkout', '-q', 'FETCH_HEAD']);
   await git(['submodule', 'update', '--init', '--depth', '1', '-q']);
-  await marker.writeAsString(libztCommit);
+  final patches = Directory.fromUri(input.packageRoot.resolve('hook/patches/'));
+  final files = patches.existsSync()
+      ? (patches.listSync().whereType<File>().where((f) => f.path.endsWith('.patch')).toList()
+          ..sort((a, b) => a.path.compareTo(b.path)))
+      : <File>[];
+  for (final patch in files) {
+    logger.info('Applying ${patch.uri.pathSegments.last}');
+    await git(['apply', patch.path]);
+  }
+  await marker.writeAsString('$libztCommit p$patchLevel');
   return dir.uri;
 }
 

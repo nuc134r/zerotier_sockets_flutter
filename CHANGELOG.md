@@ -1,3 +1,12 @@
+## 2.0.0-dev.5
+
+- Fix: random crashes from heap corruption. libzt fills its event structs from ZeroTier's own, which
+  hold more: a peer with more than 16 paths (64 allowed), a network with more than 16 addresses (32) or
+  32 routes (128) wrote past the end of the struct into whatever was next in the heap. The crash then
+  came later, anywhere in the app. Found with `memory_guard`. The build hook now applies the fixes in
+  hook/patches to the pinned libzt (peers are also copied field by field: the structs differ, and the
+  copy left a bogus `ifname` pointer). A `libzt_src` checkout needs the patches applied by hand.
+
 ## 2.0.0-dev.4
 
 - `memory_guard` user define: builds libzt with a guarded allocator for finding heap corruption. Each

@@ -1,0 +1,56 @@
+--- a/src/NodeService.cpp
++++ b/src/NodeService.cpp
+@@ -797,12 +797,17 @@
+             nd->port_error = ns->config.portError;
+             nd->netconf_rev = ns->config.netconfRevision;
+             // Copy and convert address structures
+-            nd->assigned_addr_count = ns->config.assignedAddressCount;
+-            for (unsigned int i = 0; i < ns->config.assignedAddressCount; i++) {
++            // nux: ZeroTier allows ZT_MAX_ZT_ASSIGNED_ADDRESSES (32) and ZT_MAX_NETWORK_ROUTES (128), nd holds
++            // ZTS_MAX_ASSIGNED_ADDRESSES (16) and ZTS_MAX_NETWORK_ROUTES (32): copying more wrote past nd.
++            nd->assigned_addr_count = ns->config.assignedAddressCount < ZTS_MAX_ASSIGNED_ADDRESSES
++                                          ? ns->config.assignedAddressCount
++                                          : ZTS_MAX_ASSIGNED_ADDRESSES;
++            for (unsigned int i = 0; i < nd->assigned_addr_count; i++) {
+                 native_ss_to_zts_ss(&(nd->assigned_addrs[i]), &(ns->config.assignedAddresses[i]));
+             }
+-            nd->route_count = ns->config.routeCount;
+-            for (unsigned int i = 0; i < ns->config.routeCount; i++) {
++            nd->route_count =
++                ns->config.routeCount < ZTS_MAX_NETWORK_ROUTES ? ns->config.routeCount : ZTS_MAX_NETWORK_ROUTES;
++            for (unsigned int i = 0; i < nd->route_count; i++) {
+                 native_ss_to_zts_ss(&(nd->routes[i].target), &(ns->config.routes[i].target));
+                 native_ss_to_zts_ss(&(nd->routes[i].via), &(ns->config.routes[i].via));
+                 nd->routes[i].flags = ns->config.routes[i].flags;
+@@ -845,11 +850,29 @@
+         case ZTS_EVENT_PEER_UNREACHABLE:
+         case ZTS_EVENT_PEER_PATH_DISCOVERED:
+         case ZTS_EVENT_PEER_PATH_DEAD: {
++            // nux: ZT_Peer and zts_peer_info_t are laid out differently (memcpy filled the wrong fields, and
++            // path ifname with a bogus pointer), and a peer can have ZT_MAX_PEER_NETWORK_PATHS (64) paths where
++            // pd holds ZTS_MAX_PEER_NETWORK_PATHS (16): a peer with more than 16 wrote past pd, corrupting
++            // the heap. Copied field by field, at most ZTS_MAX_PEER_NETWORK_PATHS paths.
+             zts_peer_info_t* pd = new zts_peer_info_t();
+             ZT_Peer* peer = (ZT_Peer*)obj;
+-            memcpy(pd, peer, sizeof(zts_peer_info_t));
+-            for (unsigned int j = 0; j < peer->pathCount; j++) {
++            pd->peer_id = peer->address;
++            pd->ver_major = peer->versionMajor;
++            pd->ver_minor = peer->versionMinor;
++            pd->ver_rev = peer->versionRev;
++            pd->latency = peer->latency;
++            pd->role = (zts_peer_role_t)peer->role;
++            pd->path_count =
++                peer->pathCount < ZTS_MAX_PEER_NETWORK_PATHS ? peer->pathCount : ZTS_MAX_PEER_NETWORK_PATHS;
++            for (unsigned int j = 0; j < pd->path_count; j++) {
+                 native_ss_to_zts_ss(&(pd->paths[j].address), &(peer->paths[j].address));
++                pd->paths[j].last_tx = peer->paths[j].lastSend;
++                pd->paths[j].last_rx = peer->paths[j].lastReceive;
++                pd->paths[j].trusted_path_id = peer->paths[j].trustedPathId;
++                pd->paths[j].latency = peer->paths[j].latencyMean;
++                pd->paths[j].ifname = NULL;
++                pd->paths[j].expired = peer->paths[j].expired;
++                pd->paths[j].preferred = peer->paths[j].preferred;
+             }
+             objptr = (void*)pd;
+             break;
