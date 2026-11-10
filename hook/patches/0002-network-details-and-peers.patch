@@ -1,0 +1,175 @@
+diff --git a/include/ZeroTierSockets.h b/include/ZeroTierSockets.h
+index 98058e9..b7b32c5 100644
+--- a/include/ZeroTierSockets.h
++++ b/include/ZeroTierSockets.h
+@@ -3014,6 +3014,25 @@ ZTS_API int ZTCALL zts_core_query_mc_count(uint64_t net_id);
+  */
+ ZTS_API int ZTCALL zts_core_query_mc(uint64_t net_id, unsigned int idx, uint64_t* mac, uint32_t* adi);
+ 
++/**
++ * @brief (nux) The peers this node knows, one per line: address (10 hex digits), role (0 leaf, 1 moon,
++ * 2 planet), latency in ms (-1 when unknown), version (-1.-1.-1 when unknown), then each live path as
++ * address/port, followed by * when preferred. Needs no core lock.
++ *
++ * @return The length of the whole list (dst holds as much as fits, terminated). `ZTS_ERR_SERVICE` if the
++ * core service is unavailable.
++ */
++ZTS_API int ZTCALL zts_core_query_peers(char* dst, unsigned int len);
++
++/**
++ * @brief (nux) A network's addresses and routes, one per line: "addr <address>/<prefix length>" and
++ * "route <target>/<prefix length> <gateway, - when none> <flags> <metric>". Needs no core lock.
++ *
++ * @return The length of the whole text (dst holds as much as fits, terminated). `ZTS_ERR_NO_RESULT` if
++ * the network is not joined, `ZTS_ERR_SERVICE` if the core service is unavailable.
++ */
++ZTS_API int ZTCALL zts_core_query_network(uint64_t net_id, char* dst, unsigned int len);
++
+ //----------------------------------------------------------------------------//
+ // Utilities                                                                  //
+ //----------------------------------------------------------------------------//
+diff --git a/src/Controls.cpp b/src/Controls.cpp
+index 536868f..a2a5252 100644
+--- a/src/Controls.cpp
++++ b/src/Controls.cpp
+@@ -407,6 +407,18 @@ int zts_core_query_path(uint64_t peer_id, unsigned int idx, char* path, unsigned
+     return zts_service->getPathAtIdx(peer_id, idx, path, len);
+ }
+ 
++int zts_core_query_network(uint64_t net_id, char* dst, unsigned int len)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_service->networkDetails(net_id, dst, len);
++}
++
++int zts_core_query_peers(char* dst, unsigned int len)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_service->peerList(dst, len);
++}
++
+ int zts_core_query_mc_count(uint64_t net_id)
+ {
+     ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
+diff --git a/src/NodeService.cpp b/src/NodeService.cpp
+index 9f99af5..17aea28 100644
+--- a/src/NodeService.cpp
++++ b/src/NodeService.cpp
+@@ -1128,6 +1128,102 @@ int NodeService::getMulticastSubAtIdx(uint64_t net_id, unsigned int idx, uint64_
+     return ZTS_ERR_OK;
+ }
+ 
++int NodeService::networkDetails(uint64_t net_id, char* dst, unsigned int len)
++{
++    // nux: the network's addresses and routes as text, read under the lock (the zts_core_query_* calls
++    // need the caller to hold it, and zts_addr_get_all overflows its array past 16 addresses):
++    //   addr <address>/<prefix length>
++    //   route <target>/<prefix length> <gateway, - when none> <flags> <metric>
++    // Returns the length of the whole text; dst gets as much as fits, terminated.
++    if (dst && len) {
++        dst[0] = 0;
++    }
++    std::string out;
++    {
++        Mutex::Lock _l(_nets_m);
++        std::map<uint64_t, NetworkState>::const_iterator n(_nets.find(net_id));
++        if (n == _nets.end()) {
++            return ZTS_ERR_NO_RESULT;
++        }
++        const ZT_VirtualNetworkConfig& c = n->second.config;
++        char a[64];
++        char line[200];
++        for (unsigned int i = 0; i < c.assignedAddressCount && i < ZT_MAX_ZT_ASSIGNED_ADDRESSES; i++) {
++            snprintf(line, sizeof(line), "addr %s\n", InetAddress(&(c.assignedAddresses[i])).toString(a));
++            out += line;
++        }
++        for (unsigned int i = 0; i < c.routeCount && i < ZT_MAX_NETWORK_ROUTES; i++) {
++            char via[64] = "-";
++            const InetAddress gw(&(c.routes[i].via));
++            if (gw.ss_family == AF_INET || gw.ss_family == AF_INET6) {
++                gw.toIpString(via);
++            }
++            snprintf(
++                line,
++                sizeof(line),
++                "route %s %s %u %u\n",
++                InetAddress(&(c.routes[i].target)).toString(a),
++                via,
++                (unsigned)c.routes[i].flags,
++                (unsigned)c.routes[i].metric);
++            out += line;
++        }
++    }
++    if (dst && len) {
++        snprintf(dst, len, "%s", out.c_str());
++    }
++    return (int)out.size();
++}
++
++int NodeService::peerList(char* dst, unsigned int len) const
++{
++    // nux: one line per peer: address role latency version, then its live paths (address/port, * when
++    // preferred). Returns the length of the whole list; dst gets as much as fits, terminated.
++    if (! _node) {
++        return ZTS_ERR_SERVICE;
++    }
++    if (dst && len) {
++        dst[0] = 0;
++    }
++    ZT_PeerList* pl = _node->peers();
++    if (! pl) {
++        return 0;
++    }
++    std::string out;
++    char line[96];
++    char addr[64];
++    for (unsigned long i = 0; i < pl->peerCount; i++) {
++        const ZT_Peer& p = pl->peers[i];
++        snprintf(
++            line,
++            sizeof(line),
++            "%.10llx %d %d %d.%d.%d",
++            (unsigned long long)p.address,
++            (int)p.role,
++            p.latency,
++            p.versionMajor,
++            p.versionMinor,
++            p.versionRev);
++        out += line;
++        for (unsigned int j = 0; j < p.pathCount && j < ZT_MAX_PEER_NETWORK_PATHS; j++) {
++            if (p.paths[j].expired) {
++                continue;
++            }
++            out += ' ';
++            out += InetAddress(&(p.paths[j].address)).toString(addr);
++            if (p.paths[j].preferred) {
++                out += '*';
++            }
++        }
++        out += '\n';
++    }
++    _node->freeQueryResult((void*)pl);
++    if (dst && len) {
++        snprintf(dst, len, "%s", out.c_str());
++    }
++    return (int)out.size();
++}
++
+ int NodeService::getPathAtIdx(uint64_t peer_id, unsigned int idx, char* path, unsigned int len)
+ {
+     return ZTS_ERR_NO_RESULT;   // TODO
+diff --git a/src/NodeService.hpp b/src/NodeService.hpp
+index d9a9925..7b9fb02 100644
+--- a/src/NodeService.hpp
++++ b/src/NodeService.hpp
+@@ -311,6 +311,10 @@ class NodeService {
+ 
+     int getPathAtIdx(uint64_t peer_id, unsigned int idx, char* path, unsigned int len);
+ 
++    int peerList(char* dst, unsigned int len) const;
++
++    int networkDetails(uint64_t net_id, char* dst, unsigned int len);
++
+     /** Orbit a moon */
+     int orbit(uint64_t moonWorldId, uint64_t moonSeed);
+ 

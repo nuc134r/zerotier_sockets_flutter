@@ -1,3 +1,11 @@
+## 2.0.0-dev.6
+
+- `ZeroTierNode.details(id)`: a joined network's addresses (with prefix lengths), routes, type, MAC, MTU
+  and broadcast; `ZeroTierNode.peers()`: the peers (roots and members) with role, latency, version and
+  live paths; `ZeroTierNode.port`. libzt could not list peers, and its route and address queries either
+  needed a lock the caller could not take safely or overflowed past 16 addresses: patch 0002 adds two
+  text queries that read under the lock.
+
 ## 2.0.0-dev.5
 
 - Fix: random crashes from heap corruption. libzt fills its event structs from ZeroTier's own, which

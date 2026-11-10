@@ -29,7 +29,9 @@ const libztCommit = 'a6f6886a8c8c07249f9e5d0cae431848727fe845';
 ///
 /// 0001: event structs were filled past their end (a peer with more than 16 paths, a network with more
 /// than 16 addresses or 32 routes): heap corruption that crashed apps at random.
-const patchLevel = 1;
+/// 0002: zts_core_query_network (a network's addresses and routes, under the lock) and
+/// zts_core_query_peers (the peers and their paths; libzt had no way to list them).
+const patchLevel = 2;
 
 void main(List<String> args) async {
   await build(args, (input, output) async {

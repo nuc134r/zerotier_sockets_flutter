@@ -41,6 +41,35 @@ void main() {
     expect(state.idHex, '8056c2e21c000001');
   });
 
+  test('node and network details, peers', () {
+    expect(node.port, isNotNull);
+    final unknown = node.details(parseNetworkId('8056c2e21c000001')!);
+    expect(unknown.addresses, isEmpty);
+    expect(unknown.routes, isEmpty);
+    // Offline here: no peers, or the roots once it reaches them.
+    expect(node.peers().every((p) => RegExp(r'^[0-9a-f]{10}$').hasMatch(p.address)), isTrue);
+  });
+
+  test('details and peers text', () {
+    final (addresses, routes) = parseNetworkDetails(
+      'addr fd00:db8::1/88\naddr 192.0.2.5/24\nroute 192.0.2.0/24 - 0 0\nroute 198.51.100.0/24 192.0.2.1 1 5\n',
+    );
+    expect(addresses, ['192.0.2.5/24', 'fd00:db8::1/88']);
+    expect(routes, [
+      const ZeroTierRoute(target: '192.0.2.0/24'),
+      const ZeroTierRoute(target: '198.51.100.0/24', via: '192.0.2.1', flags: 1, metric: 5),
+    ]);
+    final peers = parsePeers('0123456789 2 87 -1.-1.-1 192.0.2.9/9993*\nabcdefabcd 0 -1 1.14.2\n');
+    expect(peers, hasLength(2));
+    expect(peers[0].role, ZeroTierPeerRole.planet);
+    expect(peers[0].latency, 87);
+    expect(peers[0].version, isNull);
+    expect(peers[0].paths, [const ZeroTierPath('192.0.2.9/9993', preferred: true)]);
+    expect(peers[1].direct, isFalse);
+    expect(peers[1].latency, isNull);
+    expect(peers[1].version, '1.14.2');
+  });
+
   // Without a joined network lwIP has no interface, not even loopback: sockets bind, sending fails.
   test('sockets bind offline; sending reports the unreachable network', () {
     final udp = ZeroTierDatagramSocket.bind('0.0.0.0', 41001);
