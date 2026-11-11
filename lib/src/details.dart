@@ -15,6 +15,61 @@ external int _queryNetwork(int netId, Pointer<Char> dst, int len);
 @Native<Int Function(Pointer<Char>, UnsignedInt)>(symbol: 'zts_core_query_peers')
 external int _queryPeers(Pointer<Char> dst, int len);
 
+// Added to libzt by hook/patches/0003.
+@Native<Int Function(Pointer<Char>, UnsignedInt)>(symbol: 'zts_core_query_neighbors')
+external int _queryNeighbors(Pointer<Char> dst, int len);
+
+/// A member of a joined network this node exchanged IPv4 traffic with lately (the network stack's ARP
+/// table, which forgets entries after a few minutes).
+class ZeroTierNeighbor {
+  const ZeroTierNeighbor({required this.networkId, required this.ip, required this.address});
+
+  /// 16 hex digits.
+  final String networkId;
+  final String ip;
+
+  /// The member's ZeroTier address (10 hex digits).
+  final String address;
+
+  @override
+  bool operator ==(Object other) =>
+      other is ZeroTierNeighbor && other.networkId == networkId && other.ip == ip && other.address == address;
+
+  @override
+  int get hashCode => Object.hash(networkId, ip, address);
+}
+
+/// Parses zts_core_query_neighbors's text.
+List<ZeroTierNeighbor> parseNeighbors(String text) => [
+      for (final line in text.split('\n'))
+        if (line.trim().split(' ') case [final nwid, final ip, final address] when nwid.length == 16 && address.length == 10)
+          ZeroTierNeighbor(networkId: nwid, ip: ip, address: address),
+    ];
+
+/// The ZeroTier address inside an IPv6 address of network [networkId] (16 hex digits), when the network
+/// uses ZeroTier's RFC4193 (`fd` + network id + `9993` + address) or 6PLANE (`fc` + folded network id +
+/// address) scheme; null otherwise.
+String? zeroTierAddressFromIp(String ip, String networkId) {
+  final List<int> b;
+  try {
+    b = Uri.parseIPv6Address(ip.split('%').first);
+  } on FormatException {
+    return null;
+  }
+  final nwid = BigInt.tryParse(networkId, radix: 16);
+  if (nwid == null) return null;
+  String hex(Iterable<int> bytes) => [for (final x in bytes) x.toRadixString(16).padLeft(2, '0')].join();
+  final idBytes = [for (var s = 56; s >= 0; s -= 8) ((nwid >> s) & BigInt.from(0xff)).toInt()];
+  if (b[0] == 0xfd && hex(b.sublist(1, 9)) == hex(idBytes) && b[9] == 0x99 && b[10] == 0x93) {
+    return hex(b.sublist(11, 16));
+  }
+  if (b[0] == 0xfc) {
+    final folded = [for (var i = 0; i < 4; i++) idBytes[i] ^ idBytes[i + 4]];
+    if (hex(b.sublist(1, 5)) == hex(folded)) return hex(b.sublist(5, 10));
+  }
+  return null;
+}
+
 /// A route the network's controller pushed.
 class ZeroTierRoute {
   const ZeroTierRoute({required this.target, this.via, this.flags = 0, this.metric = 0});
@@ -187,6 +242,12 @@ extension ZeroTierNodeDetails on ZeroTierNode {
       addresses: addresses.isEmpty ? state.addresses : addresses,
       routes: routes,
     );
+  }
+
+  /// Members of joined networks this node talked to lately over IPv4, with their ZeroTier addresses.
+  List<ZeroTierNeighbor> neighbors() {
+    if (!running) return const [];
+    return parseNeighbors(_query(_queryNeighbors) ?? '');
   }
 
   /// The peers the node knows (roots and network members), with their paths.

@@ -48,6 +48,19 @@ void main() {
     expect(unknown.routes, isEmpty);
     // Offline here: no peers, or the roots once it reaches them.
     expect(node.peers().every((p) => RegExp(r'^[0-9a-f]{10}$').hasMatch(p.address)), isTrue);
+    expect(node.neighbors(), isEmpty, reason: 'no network, no traffic');
+  });
+
+  test('neighbors text; ZeroTier addresses inside IPv6 addresses', () {
+    expect(parseNeighbors('8056c2e21c000001 192.0.2.7 0123456789\njunk\n'), [
+      const ZeroTierNeighbor(networkId: '8056c2e21c000001', ip: '192.0.2.7', address: '0123456789'),
+    ]);
+    // RFC4193: fd + network id + 9993 + address.
+    expect(zeroTierAddressFromIp('fd80:56c2:e21c:0000:0199:9301:2345:6789', '8056c2e21c000001'), '0123456789');
+    // 6PLANE: fc + (upper 32 bits ^ lower 32 bits of the network id) + address.
+    expect(zeroTierAddressFromIp('fc9c:56c2:e301:2345:6789::1', '8056c2e21c000001'), '0123456789');
+    expect(zeroTierAddressFromIp('2001:db8::1', '8056c2e21c000001'), isNull);
+    expect(zeroTierAddressFromIp('192.0.2.7', '8056c2e21c000001'), isNull);
   });
 
   test('details and peers text', () {

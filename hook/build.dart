@@ -31,7 +31,8 @@ const libztCommit = 'a6f6886a8c8c07249f9e5d0cae431848727fe845';
 /// than 16 addresses or 32 routes): heap corruption that crashed apps at random.
 /// 0002: zts_core_query_network (a network's addresses and routes, under the lock) and
 /// zts_core_query_peers (the peers and their paths; libzt had no way to list them).
-const patchLevel = 2;
+/// 0003: zts_core_query_neighbors (the stack's ARP table, as network, IP and member's ZeroTier address).
+const patchLevel = 3;
 
 void main(List<String> args) async {
   await build(args, (input, output) async {

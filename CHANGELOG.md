@@ -1,3 +1,9 @@
+## 2.0.0-dev.7
+
+- `ZeroTierNode.neighbors()`: members of joined networks this node talked to lately over IPv4, with their
+  ZeroTier addresses (from the network stack's ARP table; a member's MAC encodes its address; patch 0003).
+  `zeroTierAddressFromIp()` reads the address out of RFC4193 and 6PLANE IPv6 addresses.
+
 ## 2.0.0-dev.6
 
 - `ZeroTierNode.details(id)`: a joined network's addresses (with prefix lengths), routes, type, MAC, MTU

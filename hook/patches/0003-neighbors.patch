@@ -1,0 +1,110 @@
+diff --git a/include/ZeroTierSockets.h b/include/ZeroTierSockets.h
+index b7b32c5..1eae377 100644
+--- a/include/ZeroTierSockets.h
++++ b/include/ZeroTierSockets.h
+@@ -3024,6 +3024,15 @@ ZTS_API int ZTCALL zts_core_query_mc(uint64_t net_id, unsigned int idx, uint64_t
+  */
+ ZTS_API int ZTCALL zts_core_query_peers(char* dst, unsigned int len);
+ 
++/**
++ * @brief (nux) The IPv4 neighbors the network stack has resolved recently (its ARP table), one per line:
++ * network id (16 hex digits), IP address, and the member's ZeroTier address (10 hex digits).
++ *
++ * @return The length of the whole text (dst holds as much as fits, terminated). `ZTS_ERR_SERVICE` if the
++ * core service is unavailable.
++ */
++ZTS_API int ZTCALL zts_core_query_neighbors(char* dst, unsigned int len);
++
+ /**
+  * @brief (nux) A network's addresses and routes, one per line: "addr <address>/<prefix length>" and
+  * "route <target>/<prefix length> <gateway, - when none> <flags> <metric>". Needs no core lock.
+diff --git a/src/Controls.cpp b/src/Controls.cpp
+index a2a5252..af8f1c2 100644
+--- a/src/Controls.cpp
++++ b/src/Controls.cpp
+@@ -413,6 +413,12 @@ int zts_core_query_network(uint64_t net_id, char* dst, unsigned int len)
+     return zts_service->networkDetails(net_id, dst, len);
+ }
+ 
++int zts_core_query_neighbors(char* dst, unsigned int len)
++{
++    ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
++    return zts_lwip_neighbors(dst, len);
++}
++
+ int zts_core_query_peers(char* dst, unsigned int len)
+ {
+     ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
+diff --git a/src/VirtualTap.cpp b/src/VirtualTap.cpp
+index a13dcbd..571ecec 100644
+--- a/src/VirtualTap.cpp
++++ b/src/VirtualTap.cpp
+@@ -42,6 +42,8 @@
+ #include <time.h>
+ #endif
+ 
++#include <string>
++
+ #define ZTS_TAP_THREAD_POLLING_INTERVAL 50
+ #define LWIP_DRIVER_LOOP_INTERVAL       100
+ 
+@@ -357,6 +359,46 @@ void zts_lwip_driver_shutdown()
+     }
+ }
+ 
++int zts_lwip_neighbors(char* dst, unsigned int len)
++{
++    // nux: the IPv4 neighbors the stack has resolved (its ARP table), one per line:
++    //   <network id> <IP address> <ZeroTier address of the member>
++    // A member's MAC is made from its ZeroTier address and the network id, so it gives the address back.
++    // Returns the length of the whole text; dst gets as much as fits, terminated.
++    if (dst && len) {
++        dst[0] = 0;
++    }
++    if (! _has_started) {
++        return 0;
++    }
++    std::string out;
++    char line[96];
++    char ip[IP4ADDR_STRLEN_MAX];
++    LOCK_TCPIP_CORE();
++    for (size_t i = 0; i < ARP_TABLE_SIZE; i++) {
++        ip4_addr_t* addr = NULL;
++        struct netif* n = NULL;
++        struct eth_addr* eth = NULL;
++        if (! etharp_get_entry(i, &addr, &n, &eth) || ! n || ! n->state) {
++            continue;
++        }
++        const uint64_t nwid = ((VirtualTap*)n->state)->_net_id;
++        uint64_t mac = 0;
++        for (int b = 0; b < 6; b++) {
++            mac = (mac << 8) | eth->addr[b];
++        }
++        const uint64_t member = MAC(mac).toAddress(nwid).toInt();
++        ip4addr_ntoa_r(addr, ip, sizeof(ip));
++        snprintf(line, sizeof(line), "%.16llx %s %.10llx\n", (unsigned long long)nwid, ip, (unsigned long long)member);
++        out += line;
++    }
++    UNLOCK_TCPIP_CORE();
++    if (dst && len) {
++        snprintf(dst, len, "%s", out.c_str());
++    }
++    return (int)out.size();
++}
++
+ void zts_lwip_remove_netif(void* netif)
+ {
+     if (! netif) {
+diff --git a/src/VirtualTap.hpp b/src/VirtualTap.hpp
+index 69cd8d7..c67ce32 100644
+--- a/src/VirtualTap.hpp
++++ b/src/VirtualTap.hpp
+@@ -248,6 +248,8 @@ void zts_lwip_driver_shutdown();
+ /**
+  * @brief Requests that a netif be brought down and removed.
+  */
++int zts_lwip_neighbors(char* dst, unsigned int len);
++
+ void zts_lwip_remove_netif(void* netif);
+ 
+ /**
