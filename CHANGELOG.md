@@ -1,3 +1,8 @@
+## 2.0.0-dev.8
+
+- Fix: a memory leak of megabytes an hour. Without an event handler (this package sets none) libzt still
+  built every event, a network's ~19 KB info included, and dropped it without freeing it (patch 0004).
+
 ## 2.0.0-dev.7
 
 - `ZeroTierNode.neighbors()`: members of joined networks this node talked to lately over IPv4, with their

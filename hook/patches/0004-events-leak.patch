@@ -1,0 +1,35 @@
+diff --git a/src/Events.hpp b/src/Events.hpp
+index da911fc..2840e4b 100644
+--- a/src/Events.hpp
++++ b/src/Events.hpp
+@@ -113,6 +113,15 @@ class Events {
+      */
+     void disable();
+ 
++    /**
++     * (nux) Whether events are passed on (an event handler is set). Without one, nothing should be built
++     * for them: enqueue() drops what it is given without freeing it.
++     */
++    bool isEnabled() const
++    {
++        return _enabled;
++    }
++
+     /**
+      * Enqueue an event to be sent to the user application
+      */
+diff --git a/src/NodeService.cpp b/src/NodeService.cpp
+index 17aea28..852298c 100644
+--- a/src/NodeService.cpp
++++ b/src/NodeService.cpp
+@@ -743,7 +743,9 @@ void NodeService::nodeEventCallback(enum ZT_Event event, const void* metaData)
+ 
+ void NodeService::sendEventToUser(unsigned int zt_event_code, const void* obj, unsigned int len)
+ {
+-    if (! _events) {
++    // nux: also without an event handler (events disabled): Events::enqueue() then returns at once and
++    // what is built below (a network's info is ~19 KB) leaked on every event, megabytes an hour.
++    if (! _events || ! _events->isEnabled()) {
+         return;
+     }
+ 
