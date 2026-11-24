@@ -28,6 +28,17 @@ udp.listen((packet) => print('${packet.address}:${packet.port} ${packet.data}'))
 udp.send([1, 2, 3], '10.147.17.5', 9000);
 ```
 
+### Through a SOCKS5 proxy
+
+libzt talks UDP only, so the proxy must relay UDP (SOCKS5 UDP ASSOCIATE). Open the association yourself
+(its TCP connection must stay open) and hand the relay's address to the node:
+
+```dart
+node.udpRelay = ZeroTierUdpRelay.socks5('192.0.2.1', 40000); // BND.ADDR / BND.PORT of the reply
+node.udpRelay = ZeroTierUdpRelay.hold; // association lost: send nothing until it is back
+node.udpRelay = null; // directly again
+```
+
 `node.watch()` streams the node's state (online, networks, assigned addresses). `await node.stop()` stops
 it; a later `start()` waits until libzt has finished stopping.
 

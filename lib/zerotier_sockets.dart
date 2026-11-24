@@ -6,4 +6,5 @@ export 'src/details.dart';
 export 'src/guard.dart';
 export 'src/native.dart' show ZeroTierException;
 export 'src/node.dart';
+export 'src/relay.dart';
 export 'src/socket.dart';

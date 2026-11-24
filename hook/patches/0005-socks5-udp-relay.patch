@@ -1,0 +1,321 @@
+diff --git a/include/ZeroTierSockets.h b/include/ZeroTierSockets.h
+index 1eae377..c808344 100644
+--- a/include/ZeroTierSockets.h
++++ b/include/ZeroTierSockets.h
+@@ -3033,6 +3033,20 @@ ZTS_API int ZTCALL zts_core_query_peers(char* dst, unsigned int len);
+  */
+ ZTS_API int ZTCALL zts_core_query_neighbors(char* dst, unsigned int len);
+ 
++/**
++ * @brief (nux) Sends all of ZeroTier's traffic through a SOCKS5 UDP relay: the address a SOCKS5 server
++ * gave for a UDP ASSOCIATE (the caller keeps that association's TCP connection open). Every packet is
++ * wrapped in a SOCKS5 UDP request header and sent to the relay; only datagrams from the relay are taken,
++ * and this device's own addresses are not advertised to peers.
++ *
++ * @param ip The relay's IP address; NULL for direct UDP again (the default); "" to hold: send and take
++ * nothing until a relay is set (e.g. while the association is being made again). Applies to a running
++ * node at once and to nodes started later.
++ * @param port The relay's UDP port.
++ * @return `ZTS_ERR_OK`, or `ZTS_ERR_ARG` if ip is not an IP address or port is 0.
++ */
++ZTS_API int ZTCALL zts_core_set_udp_relay(const char* ip, unsigned short port);
++
+ /**
+  * @brief (nux) A network's addresses and routes, one per line: "addr <address>/<prefix length>" and
+  * "route <target>/<prefix length> <gateway, - when none> <flags> <metric>". Needs no core lock.
+diff --git a/src/Controls.cpp b/src/Controls.cpp
+index af8f1c2..8261414 100644
+--- a/src/Controls.cpp
++++ b/src/Controls.cpp
+@@ -23,10 +23,16 @@
+ #include "VirtualTap.hpp"
+ 
+ #include <string.h>
++#ifndef __WINDOWS__
++#include <arpa/inet.h>
++#include <netinet/in.h>
++#endif
+ 
+ using namespace ZeroTier;
+ 
+ #ifdef __WINDOWS__
++#include <winsock2.h>
++#include <ws2tcpip.h>
+ #include <windows.h>
+ WSADATA wsaData;
+ #endif
+@@ -413,6 +419,42 @@ int zts_core_query_network(uint64_t net_id, char* dst, unsigned int len)
+     return zts_service->networkDetails(net_id, dst, len);
+ }
+ 
++int zts_core_set_udp_relay(const char* ip, unsigned short port)
++{
++    // nux: see NodeService::setUdpRelay. No service needed: it applies to a node started later too.
++    if (! ip) {
++        NodeService::setUdpRelay(0, NULL);
++        return ZTS_ERR_OK;
++    }
++    if (! *ip) {
++        NodeService::setUdpRelay(2, NULL);
++        return ZTS_ERR_OK;
++    }
++    struct sockaddr_storage ss;
++    memset(&ss, 0, sizeof(ss));
++    if (strchr(ip, ':')) {
++        struct sockaddr_in6* in6 = reinterpret_cast<struct sockaddr_in6*>(&ss);
++        if (inet_pton(AF_INET6, ip, &(in6->sin6_addr)) != 1) {
++            return ZTS_ERR_ARG;
++        }
++        in6->sin6_family = AF_INET6;
++        in6->sin6_port = htons(port);
++    }
++    else {
++        struct sockaddr_in* in4 = reinterpret_cast<struct sockaddr_in*>(&ss);
++        if (inet_pton(AF_INET, ip, &(in4->sin_addr)) != 1) {
++            return ZTS_ERR_ARG;
++        }
++        in4->sin_family = AF_INET;
++        in4->sin_port = htons(port);
++    }
++    if (! port) {
++        return ZTS_ERR_ARG;
++    }
++    NodeService::setUdpRelay(1, &ss);
++    return ZTS_ERR_OK;
++}
++
+ int zts_core_query_neighbors(char* dst, unsigned int len)
+ {
+     ACQUIRE_SERVICE(ZTS_ERR_SERVICE);
+diff --git a/src/NodeService.cpp b/src/NodeService.cpp
+index 852298c..d54a600 100644
+--- a/src/NodeService.cpp
++++ b/src/NodeService.cpp
+@@ -191,9 +191,37 @@ NodeService::NodeService()
+     , _eventsEnabled(false)
+     , _homePath("")
+     , _events(NULL)
++    , _relaySock4((PhySocket*)0)
++    , _relaySock6((PhySocket*)0)
+ {
+ }
+ 
++// nux: the SOCKS5 UDP relay all ZeroTier packets go through (NodeService::setUdpRelay)
++static Mutex _relay_m;
++static int _relayMode = 0;
++static InetAddress _relayAddr;
++
++void NodeService::setUdpRelay(int mode, const struct sockaddr_storage* relay)
++{
++    Mutex::Lock _l(_relay_m);
++    _relayMode = (mode == 1 && ! relay) ? 2 : mode;
++    if (relay) {
++        _relayAddr = *reinterpret_cast<const InetAddress*>(relay);
++    }
++    else {
++        _relayAddr.zero();
++    }
++}
++
++int NodeService::udpRelayMode(InetAddress* relay)
++{
++    Mutex::Lock _l(_relay_m);
++    if (relay) {
++        *relay = _relayAddr;
++    }
++    return _relayMode;
++}
++
+ NodeService::~NodeService()
+ {
+     _binder.closeAll(_phy);
+@@ -230,6 +258,19 @@ NodeService::ReasonForTermination NodeService::run()
+             }
+         }
+ 
++        // nux: sockets for a SOCKS5 UDP relay (setUdpRelay), on any port: bound before the node exists, as it
++        // may send at once (and binding later from another thread is not safe with Phy)
++        {
++            struct sockaddr_in in4;
++            memset(&in4, 0, sizeof(in4));
++            in4.sin_family = AF_INET;
++            _relaySock4 = _phy.udpBind(reinterpret_cast<const struct sockaddr*>(&in4), (void*)0, 0);
++            struct sockaddr_in6 in6;
++            memset(&in6, 0, sizeof(in6));
++            in6.sin6_family = AF_INET6;
++            _relaySock6 = _phy.udpBind(reinterpret_cast<const struct sockaddr*>(&in6), (void*)0, 0);
++        }
++
+         // Set callbacks for ZT Node
+         {
+             struct ZT_Node_Callbacks cb;
+@@ -454,6 +495,9 @@ NodeService::ReasonForTermination NodeService::run()
+ 
+                 _node->clearLocalInterfaceAddresses();
+ 
++                // nux: through a relay, this device's own addresses are not told to anyone
++                if (udpRelayMode(NULL) == 0) {
++
+ #ifdef ZT_USE_MINIUPNPC
+                 if (_portMapper) {
+                     std::vector<InetAddress> mappedAddresses(_portMapper->get());
+@@ -467,6 +511,7 @@ NodeService::ReasonForTermination NodeService::run()
+                 std::vector<InetAddress> boundAddrs(_binder.allBoundLocalInterfaceAddresses());
+                 for (std::vector<InetAddress>::const_iterator i(boundAddrs.begin()); i != boundAddrs.end(); ++i)
+                     _node->addLocalInterfaceAddress(reinterpret_cast<const struct sockaddr_storage*>(&(*i)));
++                }
+             }
+ 
+             // Clean peers.d periodically
+@@ -493,6 +538,15 @@ NodeService::ReasonForTermination NodeService::run()
+         _fatalErrorMessage = "unexpected exception in main thread: unknown exception";
+     }
+ 
++    if (_relaySock4) {
++        _phy.close(_relaySock4, false);
++        _relaySock4 = (PhySocket*)0;
++    }
++    if (_relaySock6) {
++        _phy.close(_relaySock6, false);
++        _relaySock6 = (PhySocket*)0;
++    }
++
+     {
+         Mutex::Lock _l(_nets_m);
+         for (std::map<uint64_t, NetworkState>::iterator n(_nets.begin()); n != _nets.end(); ++n) {
+@@ -618,6 +672,56 @@ void NodeService::phyOnDatagram(
+ {
+     ZTS_UNUSED_ARG(uptr);
+     ZTS_UNUSED_ARG(localAddr);
++    InetAddress relay;
++    const int relayMode = udpRelayMode(&relay);
++    if ((sock == _relaySock4) || (sock == _relaySock6)) {
++        // nux: a packet from the SOCKS5 relay: RSV(2) FRAG(1) ATYP(1) address port data
++        if ((relayMode != 1) || (! (*reinterpret_cast<const InetAddress*>(from) == relay))) {
++            return;
++        }
++        const uint8_t* b = reinterpret_cast<const uint8_t*>(data);
++        if ((len < 10) || (b[2] != 0)) {
++            return;   // fragments are not reassembled (ZeroTier packets fit in one datagram)
++        }
++        struct sockaddr_storage src;
++        memset(&src, 0, sizeof(src));
++        unsigned long header;
++        if (b[3] == 1) {
++            struct sockaddr_in* in4 = reinterpret_cast<struct sockaddr_in*>(&src);
++            in4->sin_family = AF_INET;
++            memcpy(&(in4->sin_addr), b + 4, 4);
++            memcpy(&(in4->sin_port), b + 8, 2);
++            header = 10;
++        }
++        else if ((b[3] == 4) && (len >= 22)) {
++            struct sockaddr_in6* in6 = reinterpret_cast<struct sockaddr_in6*>(&src);
++            in6->sin6_family = AF_INET6;
++            memcpy(&(in6->sin6_addr), b + 4, 16);
++            memcpy(&(in6->sin6_port), b + 20, 2);
++            header = 22;
++        }
++        else {
++            return;   // a domain name: ZeroTier only sends to addresses
++        }
++        const ZT_ResultCode rc = _node->processWirePacket(
++            (void*)0,
++            OSUtils::now(),
++            reinterpret_cast<int64_t>(sock),
++            &src,
++            b + header,
++            (unsigned int)(len - header),
++            &_nextBackgroundTaskDeadline);
++        if (ZT_ResultCode_isFatal(rc)) {
++            Mutex::Lock _l(_termReason_m);
++            _termReason = ONE_UNRECOVERABLE_ERROR;
++            _fatalErrorMessage = "fatal error code from processWirePacket (relayed)";
++            this->terminate();
++        }
++        return;
++    }
++    if (relayMode != 0) {
++        return;   // nux: through a relay (or holding), nothing is taken directly
++    }
+     if ((len >= 16) && (reinterpret_cast<const InetAddress*>(from)->ipScope() == InetAddress::IP_SCOPE_GLOBAL))
+         _lastDirectReceiveFromGlobal = OSUtils::now();
+     const ZT_ResultCode rc = _node->processWirePacket(
+@@ -1576,6 +1680,46 @@ int NodeService::nodeWirePacketSendFunction(
+     unsigned int len,
+     unsigned int ttl)
+ {
++    // nux: through a SOCKS5 UDP relay, every packet goes to the relay wrapped in a SOCKS5 UDP header
++    // (RSV(2) FRAG(1) ATYP(1) address port), nothing directly; holding, nothing goes out at all.
++    {
++        InetAddress relay;
++        const int relayMode = udpRelayMode(&relay);
++        if (relayMode == 2) {
++            return 0;
++        }
++        if (relayMode == 1) {
++            PhySocket* s = (relay.ss_family == AF_INET6) ? _relaySock6 : _relaySock4;
++            uint8_t buf[22 + ZT_MAX_PHYSMTU];
++            if ((! s) || (len > ZT_MAX_PHYSMTU)) {
++                return -1;
++            }
++            unsigned int header;
++            buf[0] = 0;
++            buf[1] = 0;
++            buf[2] = 0;
++            if (addr->ss_family == AF_INET) {
++                const struct sockaddr_in* in4 = reinterpret_cast<const struct sockaddr_in*>(addr);
++                buf[3] = 1;
++                memcpy(buf + 4, &(in4->sin_addr), 4);
++                memcpy(buf + 8, &(in4->sin_port), 2);
++                header = 10;
++            }
++            else if (addr->ss_family == AF_INET6) {
++                const struct sockaddr_in6* in6 = reinterpret_cast<const struct sockaddr_in6*>(addr);
++                buf[3] = 4;
++                memcpy(buf + 4, &(in6->sin6_addr), 16);
++                memcpy(buf + 20, &(in6->sin6_port), 2);
++                header = 22;
++            }
++            else {
++                return -1;
++            }
++            memcpy(buf + header, data, len);
++            return _phy.udpSend(s, reinterpret_cast<const struct sockaddr*>(&relay), buf, header + len) ? 0 : -1;
++        }
++    }
++
+     // Even when relaying we still send via UDP. This way if UDP starts
+     // working we can instantly "fail forward" to it and stop using TCP
+     // proxy fallback, which is slow.
+diff --git a/src/NodeService.hpp b/src/NodeService.hpp
+index 7b9fb02..d5c3fe1 100644
+--- a/src/NodeService.hpp
++++ b/src/NodeService.hpp
+@@ -116,6 +116,10 @@ class NodeService {
+     Phy<NodeService*> _phy;
+     Node* _node;
+ 
++    // nux: the sockets that talk to the SOCKS5 UDP relay (see setUdpRelay), bound at start
++    PhySocket* _relaySock4;
++    PhySocket* _relaySock6;
++
+     uint64_t _nodeId;
+     unsigned int _primaryPort;
+     unsigned int _secondaryPort;
+@@ -315,6 +319,16 @@ class NodeService {
+ 
+     int networkDetails(uint64_t net_id, char* dst, unsigned int len);
+ 
++    /**
++     * nux: Sends every ZeroTier packet through a SOCKS5 UDP relay (UDP ASSOCIATE): each one is wrapped
++     * in a SOCKS5 UDP request header and sent to `relay`, and only datagrams from `relay` are taken (and
++     * unwrapped). mode 0: off (direct UDP, the default); 1: through `relay`; 2: hold (send and take
++     * nothing, e.g. while the association is being made again). Applies to every node, also one that
++     * starts later.
++     */
++    static void setUdpRelay(int mode, const struct sockaddr_storage* relay);
++    static int udpRelayMode(InetAddress* relay);
++
+     /** Orbit a moon */
+     int orbit(uint64_t moonWorldId, uint64_t moonSeed);
+ 

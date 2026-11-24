@@ -99,6 +99,48 @@ void main() {
     );
   });
 
+  test('UDP relay: every packet goes to the relay in a SOCKS5 UDP header; hold sends nothing', () async {
+    final relay = await RawDatagramSocket.bind(InternetAddress.loopbackIPv4, 0);
+    final got = <Datagram>[];
+    relay.listen((e) {
+      final d = relay.receive();
+      if (d != null) got.add(d);
+    });
+    final a = parseNetworkId('8056c2e21c000003')!, b = parseNetworkId('8056c2e21c000004')!;
+    addTearDown(() {
+      node
+        ..udpRelay = null
+        ..leave(a)
+        ..leave(b);
+      relay.close();
+    });
+
+    expect(() => node.udpRelay = const ZeroTierUdpRelay.socks5('not an ip', 1080), throwsA(isA<ZeroTierException>()));
+    expect(node.udpRelay, isNull);
+    node.udpRelay = ZeroTierUdpRelay.socks5('127.0.0.1', relay.port);
+    expect(node.udpRelay, ZeroTierUdpRelay.socks5('127.0.0.1', relay.port));
+    // Joining asks the network's controller (through a root) for its configuration at once.
+    node.join(a);
+    final deadline = DateTime.now().add(const Duration(seconds: 20));
+    while (got.isEmpty && DateTime.now().isBefore(deadline)) {
+      await Future<void>.delayed(const Duration(milliseconds: 100));
+    }
+    expect(got, isNotEmpty, reason: 'the node sent through the relay');
+    for (final d in got) {
+      expect(d.data.sublist(0, 3), [0, 0, 0], reason: 'RSV, FRAG');
+      expect(d.data[3], anyOf(1, 4), reason: 'ATYP: an IPv4 or IPv6 address');
+      final header = d.data[3] == 1 ? 10 : 22;
+      expect(d.data.length, greaterThan(header + 27), reason: 'a ZeroTier packet follows (its header is 28 bytes)');
+    }
+
+    node.udpRelay = ZeroTierUdpRelay.hold;
+    await Future<void>.delayed(const Duration(milliseconds: 300));
+    got.clear();
+    node.join(b);
+    await Future<void>.delayed(const Duration(seconds: 2));
+    expect(got, isEmpty, reason: 'holding: nothing goes out, through the relay or directly');
+  });
+
   test('cancelling a watch returns at once, even when nothing changed', () async {
     final sub = node.watch().listen((_) {});
     await Future<void>.delayed(const Duration(milliseconds: 50));

@@ -1,3 +1,11 @@
+## 2.0.0-dev.9
+
+- `ZeroTierNode.udpRelay`: the node's own UDP traffic (to roots and peers) through a SOCKS5 UDP relay, the
+  address a SOCKS5 server gives for a UDP ASSOCIATE. Each packet goes to the relay in a SOCKS5 UDP header,
+  only datagrams from the relay are taken, and the device's own addresses are not offered to peers as
+  direct paths. `ZeroTierUdpRelay.hold` sends and takes nothing (while an association is made again), so no
+  packet leaves directly in between. libzt has no TCP fallback, so a proxy has to relay UDP (patch 0005).
+
 ## 2.0.0-dev.8
 
 - Fix: a memory leak of megabytes an hour. Without an event handler (this package sets none) libzt still
