@@ -1,0 +1,17 @@
+diff --git a/src/VirtualTap.cpp b/src/VirtualTap.cpp
+index 571ecec..ef2f37c 100644
+--- a/src/VirtualTap.cpp
++++ b/src/VirtualTap.cpp
+@@ -341,6 +341,12 @@ void zts_lwip_driver_init()
+         NULL,
+         DEFAULT_THREAD_STACKSIZE,
+         DEFAULT_THREAD_PRIO);
++    // nux: wait until tcpip_init is done. Until then lwIP's core lock does not exist, and the node service
++    // (started right after this) adds a cached network's address at once, locking it: a null mutex,
++    // SIGSEGV in pthread_mutex_lock under zts_lwip_init_interface. Seen on slow cold starts.
++    for (int i = 0; ! _has_started && i < 1000; i++) {
++        zts_util_delay(5);
++    }
+ }
+ 
+ void zts_lwip_driver_shutdown()

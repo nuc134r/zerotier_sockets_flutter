@@ -1,3 +1,10 @@
+## 2.0.0-dev.10
+
+- Fix: a crash at start (SIGSEGV in `pthread_mutex_lock` under `zts_lwip_init_interface`). The node joins
+  the networks it cached on disk at once and adds their addresses, which can happen before libzt's network
+  stack thread has created its core lock (likelier on a slow cold start, e.g. right after an app update).
+  Starting now waits until the stack is up (patch 0006).
+
 ## 2.0.0-dev.9
 
 - `ZeroTierNode.udpRelay`: the node's own UDP traffic (to roots and peers) through a SOCKS5 UDP relay, the

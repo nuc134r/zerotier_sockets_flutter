@@ -34,7 +34,9 @@ const libztCommit = 'a6f6886a8c8c07249f9e5d0cae431848727fe845';
 /// 0003: zts_core_query_neighbors (the stack's ARP table, as network, IP and member's ZeroTier address).
 /// 0004: without an event handler every event (a network's info is ~19 KB) was built and never freed.
 /// 0005: zts_core_set_udp_relay: all of the node's UDP through a SOCKS5 UDP relay (UDP ASSOCIATE).
-const patchLevel = 5;
+/// 0006: zts_node_start waits for the network stack: a cached network's address was added before lwIP's
+/// core lock existed (SIGSEGV in pthread_mutex_lock, on slow cold starts).
+const patchLevel = 6;
 
 void main(List<String> args) async {
   await build(args, (input, output) async {
